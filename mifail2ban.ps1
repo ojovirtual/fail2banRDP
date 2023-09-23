@@ -9,7 +9,7 @@
   </Query>
 </QueryList>
 "@
-$WhiteList=@('2.136.234.113','127.0.0.1') #Estas IPs no se bloquean NUNCA
+$WhiteList=@('127.0.0.1') #Estas IPs no se bloquean NUNCA
 echo "Buscando en los logs accesos RDP fállidos..."
 Get-WinEvent -FilterXML $CustomView | Export-CSV "C:\Utiles\datos_prefiltro$(Get-Date -format "yyyy-MM-dd").log"
 echo "Filtrando IPs..."
