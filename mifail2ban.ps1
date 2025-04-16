@@ -1,19 +1,56 @@
 # Fail2Ban para Servidores Windows y en RDP
-# @author Isaac Moran - @ojovirtual
-# v.23092401
+# @author Isaac Moran
+# v.25041601
 #
 # Hay que generar una regla en el Firewall de Windows llamada "BLOQUEO" que rechaze todas las conexiones desde determinadas IPs
 # el script se encargará de rellenar esa lista de IPs con la de los clientes que intenten hacer login fállido
 #
+if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole("Administrator")) {
+    Write-Error "Este script debe ejecutarse como administrador."
+    exit
+}
+
 $PATH = (Split-Path $MyInvocation.MyCommand.Path -Parent) + "\"
+$logPath = $PATH + "logs\"
+if (!(Test-Path $logPath)) { New-Item -Path $logPath -ItemType Directory }
 $ficheroWL=$PATH+"wl.log"
-$ficheroLOG=$PATH+"log_$(Get-Date -format "yyyy-MM-dd").log"
-$ficheroPREFILTRO=$PATH+"datos_prefiltro$(Get-Date -format "yyyy-MM-dd").log"
-$ficheroPOSTFILTRO=$PATH+"datos_postfiltro$(Get-Date -format "yyyy-MM-dd").log"
+$ficheroLOG = $logPath + "log_$(Get-Date -format "yyyy-MM-dd").log"
+$ficheroPREFILTRO = $logPath + "datos_prefiltro$(Get-Date -format "yyyy-MM-dd").log"
+$ficheroPOSTFILTRO = $logPath + "datos_postfiltro$(Get-Date -format "yyyy-MM-dd").log"
 $HorasBloqueo=6 #Las IPs que hayan intentando logar en estas últimas X horas son bloqueadas
 $HorasWL=24 #Las IPs que hayan logado correctamente en estas últimas X horas van a WhiteList
 
-# Query para buscar en el log del sistema los intentos de conexión fállidos de las últimas horas
+# Nombre del origen personalizado para registrar los eventos
+$origenEvento = "Fail2Ban-RDP"
+$logEvento = "Application"
+
+# Comprobar si el origen del evento ya existe
+if (-not [System.Diagnostics.EventLog]::SourceExists($origenEvento)) {
+    try {
+        New-EventLog -LogName $logEvento -Source $origenEvento
+        Write-Output "Origen de evento '$origenEvento' creado en el registro '$logEvento'"
+    } catch {
+        Write-Error "No se pudo crear el origen de evento. Ejecuta el script como administrador."
+    }
+}
+
+
+#limpiar logs antiguos
+Get-ChildItem -Path $logPath -File | Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-15) } | Remove-Item
+
+if (-not (Test-Path $ficheroWL)) {
+    New-Item -Path $ficheroWL -ItemType File -Force | Out-Null
+}
+
+if (-not (Get-NetFirewallRule -DisplayName "BLOQUEO")) {
+    Write-Error "La regla 'BLOQUEO' no existe. Créala manualmente antes de ejecutar este script."
+    exit
+}
+
+
+
+
+# Query para buscar en el log del sistema los intentos de conexión fállidos de las últimas 6 horas
 [xml]$VistaErrorLogin=@"
 <QueryList>
   <Query Id="0" Path="Security">
@@ -21,7 +58,7 @@ $HorasWL=24 #Las IPs que hayan logado correctamente en estas últimas X horas va
   </Query>
 </QueryList>
 "@
-# Busca en el log del sistema los intentos de conexión exitosos de las últimas horas
+# Busca en el log del sistema los intentos de conexión exitosos de las últimas 24 horas
 [xml]$VistaOKLogin=@"
 <QueryList>
   <Query Id="0" Path="Security">
@@ -54,6 +91,13 @@ $ips | Out-File -Append $ficheroLOG
 Set-NetFirewallRule -DisplayName "BLOQUEO" -RemoteAddress $ips
 Remove-Item $ficheroPOSTFILTRO
 Remove-Item $ficheroPREFILTRO
+#logar eventos
+if ($ips.Count -gt 0) {
+    $mensajeEvento = "Se han bloqueado las siguientes IPs en la regla 'BLOQUEO': $($ips -join ', ')"
+    Write-EventLog -LogName $logEvento -Source $origenEvento -EntryType Warning -EventId 1001 -Message $mensajeEvento
+}
 Write-Output "Fin proceso" >> $ficheroLOG
 Write-Output "===================`n" >> $ficheroLOG
 Write-Output "" >> $ficheroLOG
+Write-Host "IPs bloqueadas exitosamente:" -ForegroundColor Green
+$ips | ForEach-Object { Write-Host $_ -ForegroundColor Red }
